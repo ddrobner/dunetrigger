@@ -31,6 +31,7 @@
 #include <fstream>
 #include <stdint.h>
 #include <map>
+#include <cstdlib>
 
 namespace duneana
 {
@@ -50,8 +51,9 @@ public:
   TriggerCosmicSensitivityAnalysis &operator=(TriggerCosmicSensitivityAnalysis const &) = delete;
   TriggerCosmicSensitivityAnalysis &operator=(TriggerCosmicSensitivityAnalysis &&) = delete;
 
-  typedef std::tuple<uint64_t, uint32_t, uint16_t> tpEvent_t;
+  typedef std::tuple<unsigned int, uint32_t, uint16_t> tpEvent_t;
   typedef std::tuple<unsigned int, float> electronEvent_t;
+  typedef unsigned int TDCTime_t;
 
   // Required functions.
   void analyze(art::Event const &e) override;
@@ -79,6 +81,38 @@ private:
 
   std::map<raw::ChannelID_t, std::vector<electronEvent_t>> electron_channels;
   std::map<uint32_t, std::vector<tpEvent_t>> tp_channels;
+
+
+  // writing some methods we will use in the analysis below
+  // TODO? templatize these to use on TPs/other data products?
+  std::vector<electronEvent_t> get_electron_pulse(std::vector<electronEvent_t>& channel_data, unsigned int start_time, unsigned int max_time){
+    std::vector<electronEvent_t> pulse_evts;
+    for(electronEvent_t evt : channel_data){
+      if(std::abs(static_cast<int>(std::get<0>(evt) - start_time)) <= max_time){
+        pulse_evts.push_back(evt);
+      }
+    }
+    return pulse_evts;
+  };
+
+  float find_pulse_peak(std::vector<electronEvent_t>& channel_data, TDCTime_t start_time, TDCTime_t max_time){
+    std::vector<electronEvent_t> e_pulse = get_electron_pulse(channel_data, start_time, max_time);
+    // todo figure out if vectors have nice facilities for this
+    unsigned int high = 0;
+    for (electronEvent_t i : e_pulse){
+      unsigned int val = std::get<1>(i);
+      if(val > high){
+        high = val;
+      }
+    } 
+    return high;
+  };
+  std::vector<TDCTime_t> pulse_start_times(std::vector<electronEvent_t>& channel_data, TDCTime_t start_time, TDCTime_t max_time){
+    std::vector<TDCTime_t> start_times = {std::get<TDCTime_t>(channel_data.at(0)),};
+    // do more stuff
+    return start_times;
+  }
+
 };
 
 duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p)
@@ -116,7 +150,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     adc_peak = i.adc_peak;
     channel = i.channel;
 
-    std::tuple<uint64_t, uint32_t, uint16_t> this_tp = {adc_time, adc_int, adc_peak};
+    tpEvent_t this_tp = {static_cast<TDCTime_t>(adc_time), adc_int, adc_peak};
 
     if(tp_channels.count(channel) == 0){
       std::vector<tpEvent_t> new_ch_vect;
@@ -143,6 +177,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
       }
     }
   }
+
 }
 
 DEFINE_ART_MODULE(duneana::TriggerCosmicSensitivityAnalysis)
