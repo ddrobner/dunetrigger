@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <map>
 #include <cstdlib>
+#include <ranges>
 
 namespace duneana
 {
@@ -66,29 +67,26 @@ private:
 
   const int threshold;
 
-  const double ke_to_adc_factor = 41.649;
-
   std::vector<dunedaq::trgdataformats::TriggerPrimitive> fTriggerPrimitives;
   std::vector<uint32_t> fADCIntegrals;
 
-  // object with simmed e hits
-  size_t fNumTPs;
-  size_t fNumTPCEvts;
-
   std::vector<sim::SimChannel> fSimChannels;
-
-  std::vector<double> fEventADCs;
 
   std::map<raw::ChannelID_t, std::vector<electronEvent_t>> electron_channels;
   std::map<uint32_t, std::vector<tpEvent_t>> tp_channels;
 
+  // absolute difference for any unsigned datatype
+  // necessary to avoid integer underflow
+  template <typename T> T u_absdiff(T a, T b){
+    return (a > b) ? a - b : b - a;
+  }
 
   // writing some methods we will use in the analysis below
   // TODO? templatize these to use on TPs/other data products?
   std::vector<electronEvent_t> get_electron_pulse(std::vector<electronEvent_t>& channel_data, unsigned int start_time, unsigned int max_time){
     std::vector<electronEvent_t> pulse_evts;
     for(electronEvent_t evt : channel_data){
-      if(std::abs(static_cast<int>(std::get<0>(evt) - start_time)) <= max_time){
+      if(u_absdiff<unsigned int>(std::get<0>(evt), start_time) <= max_time){
         pulse_evts.push_back(evt);
       }
     }
@@ -107,10 +105,27 @@ private:
     } 
     return high;
   };
-  std::vector<TDCTime_t> pulse_start_times(std::vector<electronEvent_t>& channel_data, TDCTime_t start_time, TDCTime_t max_time){
+
+  std::vector<TDCTime_t> pulse_start_times(std::vector<electronEvent_t>& channel_data, TDCTime_t max_time){
     std::vector<TDCTime_t> start_times = {std::get<TDCTime_t>(channel_data.at(0)),};
-    // do more stuff
+    for(size_t i = 0; i < (channel_data.size()-1); i++){
+      if( ( ( u_absdiff<unsigned int>(start_times.back(), std::get<0>(channel_data[i])) >= max_time ) || u_absdiff<unsigned int>(std::get<0>(channel_data[i]), std::get<0>(channel_data[i+1])) >= max_time ) & ( u_absdiff<unsigned int>(start_times.back(), std::get<0>(channel_data[i])) >= max_time)){
+        start_times.push_back(std::get<0>(channel_data[i]));
+      } 
+    }
     return start_times;
+  }
+
+  uint32_t count_e_over_threshold(std::vector<electronEvent_t>& channel_data, TDCTime_t max_time, uint32_t threshold) {
+    uint32_t e_over_threshold = 0U;
+    std::vector<TDCTime_t> pulse_starts = pulse_start_times(channel_data, max_time);
+    for (TDCTime_t t_start : pulse_starts){
+      float e_peak = find_pulse_peak(channel_data, t_start, max_time);
+      if (e_peak >= static_cast<float>(threshold)){
+        e_over_threshold++;
+      }
+    }
+    return e_over_threshold;
   }
 
 };
@@ -177,6 +192,17 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
       }
     }
   }
+
+  auto num_tps = fTriggerPrimitives.size();
+  uint32_t total_e_over_thresh = 0U;
+  for(std::map<raw::ChannelID_t, electronEvent_t>::const_iterator it = electron_channels.begin(); it != electron_channels.end(); it++){
+    auto cur_channel = it->first;
+    std::vector<electronEvent_t> &current_e_channel = electron_channels[cur_channel];
+    total_e_over_thresh += count_e_over_threshold(current_e_channel, static_cast<TDCTime_t>(75), 1000);
+  }
+
+  std::cout << "Num TPs" << num_tps << std::endl;
+  std::cout << "Num E over Threshold" << total_e_over_thresh << std::endl;
 
 }
 
