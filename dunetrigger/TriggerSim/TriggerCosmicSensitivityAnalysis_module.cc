@@ -153,6 +153,30 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   auto fChanHandle = e.getValidHandle<std::vector<sim::SimChannel>>(tpc_tag_);
   fSimChannels = *fChanHandle;
 
+    //  process all of the TPs into a map
+  for(dunedaq::trgdataformats::TriggerPrimitive i : fTriggerPrimitives){
+    uint64_t adc_time;
+    uint32_t adc_int;
+    uint16_t adc_peak;
+    int32_t channel;
+
+    adc_time = i.time_start/32;
+    adc_int = i.adc_integral;
+    adc_peak = i.adc_peak;
+    channel = i.channel;
+
+    tpEvent_t this_tp = {static_cast<TDCTime_t>(adc_time), adc_int, adc_peak};
+
+    if(tp_channels.count(channel) == 0){
+      std::vector<tpEvent_t> new_ch_vect;
+      new_ch_vect.push_back(this_tp);
+      tp_channels[channel] = new_ch_vect; 
+    } else{
+      tp_channels[channel].push_back(this_tp);
+    }
+
+  }
+
   // now let's do the same for the sim channels
   for(sim::SimChannel chan : fSimChannels){
     raw::ChannelID_t chanid = chan.Channel();
