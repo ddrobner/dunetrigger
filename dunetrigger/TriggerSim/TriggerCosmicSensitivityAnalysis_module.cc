@@ -28,6 +28,9 @@
 
 #include "lardataobj/Simulation/SimChannel.h"
 
+#include "TGraph.h"
+#include "TCanvas.h"
+
 #include <fstream>
 #include <stdint.h>
 #include <map>
@@ -64,8 +67,6 @@ private:
   // Declare member data here.
   art::InputTag tp_tag_;
   art::InputTag tpc_tag_;
-
-  const int threshold;
 
   std::vector<dunedaq::trgdataformats::TriggerPrimitive> fTriggerPrimitives;
   std::vector<uint32_t> fADCIntegrals;
@@ -133,8 +134,7 @@ private:
 duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p)
     : EDAnalyzer{p},
       tp_tag_(p.get<art::InputTag>("tp_tag")),
-      tpc_tag_(p.get<art::InputTag>("tpc_info_tag")),
-      threshold(p.get<int>("threshold"))
+      tpc_tag_(p.get<art::InputTag>("tpc_info_tag"))
 {
   // Call appropriate consumes<>() for any products to be retrieved by this
   // module.
@@ -153,30 +153,6 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   auto fChanHandle = e.getValidHandle<std::vector<sim::SimChannel>>(tpc_tag_);
   fSimChannels = *fChanHandle;
 
-  //  process all of the TPs into a map
-  for(dunedaq::trgdataformats::TriggerPrimitive i : fTriggerPrimitives){
-    uint64_t adc_time;
-    uint32_t adc_int;
-    uint16_t adc_peak;
-    int32_t channel;
-
-    adc_time = i.time_start/32;
-    adc_int = i.adc_integral;
-    adc_peak = i.adc_peak;
-    channel = i.channel;
-
-    tpEvent_t this_tp = {static_cast<TDCTime_t>(adc_time), adc_int, adc_peak};
-
-    if(tp_channels.count(channel) == 0){
-      std::vector<tpEvent_t> new_ch_vect;
-      new_ch_vect.push_back(this_tp);
-      tp_channels[channel] = new_ch_vect; 
-    } else{
-      tp_channels[channel].push_back(this_tp);
-    }
-
-  }
-
   // now let's do the same for the sim channels
   for(sim::SimChannel chan : fSimChannels){
     raw::ChannelID_t chanid = chan.Channel();
@@ -193,16 +169,57 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     }
   }
 
-  auto num_tps = fTriggerPrimitives.size();
+  size_t num_tps = fTriggerPrimitives.size();
+
+
+/*
   uint32_t total_e_over_thresh = 0U;
-  for(std::map<raw::ChannelID_t, electronEvent_t>::const_iterator it = electron_channels.begin(); it != electron_channels.end(); it++){
-    auto cur_channel = it->first;
-    std::vector<electronEvent_t> &current_e_channel = electron_channels[cur_channel];
-    total_e_over_thresh += count_e_over_threshold(current_e_channel, static_cast<TDCTime_t>(75), 1000);
+  for(const auto& sm_pair : electron_channels){
+    //auto cur_channel = sm_pair.first;
+    auto cur_data = sm_pair.second;
+    //std::vector<electronEvent_t> &current_e_channel = sm_pair.second;
+    if(cur_data.size() != 0){
+      total_e_over_thresh += count_e_over_threshold(cur_data, static_cast<TDCTime_t>(75), 1000U);
+    }
+  }
+*/
+
+  std::vector<double> electron_thresholds;
+  for(uint32_t i = 0; i < 20000; i += 500){
+    electron_thresholds.push_back(static_cast<double>(i));
   }
 
-  std::cout << "Num TPs" << num_tps << std::endl;
-  std::cout << "Num E over Threshold" << total_e_over_thresh << std::endl;
+  std::vector<double> eff_per_t;
+  for (uint32_t thresh : electron_thresholds){
+    uint32_t c_el_over_t = 0;
+    for(const auto& sm_pair : electron_channels){
+      auto cur_data = sm_pair.second;
+      if(cur_data.size() != 0) {
+        c_el_over_t += count_e_over_threshold(cur_data, static_cast<TDCTime_t>(75), thresh);
+      }
+    }
+
+    double ratio = static_cast<double>(num_tps)/static_cast<double>(c_el_over_t);
+    if (ratio >= 1.0){
+      eff_per_t.push_back(1.0);
+    } else{
+      eff_per_t.push_back(ratio);
+    }
+  }
+
+  TCanvas* c1 = new TCanvas();
+  auto tg = new TGraph(electron_thresholds.size(), electron_thresholds.data(), eff_per_t.data());
+  tg->SetTitle("Trigger Sensitivity (200 ADC Threshold);Electron Threshold;Efficiency");
+  tg->SetLineColor(2);
+  tg->SetLineWidth(3);
+  tg->SetMarkerSize(1.25);
+  tg->SetMarkerStyle(21);
+  tg->SetMarkerColor(1);
+  tg->Draw("AC");
+  c1->SaveAs("test_tgraph4.png");
+
+
+  //std::cout << "Efficiency: " << static_cast<double>(num_tps)/static_cast<double>(total_e_over_thresh) << std::endl;
 
 }
 
