@@ -35,7 +35,7 @@
 #include <stdint.h>
 #include <map>
 #include <cstdlib>
-#include <ranges>
+#include <numeric>
 
 namespace duneana
 {
@@ -73,7 +73,7 @@ private:
 
   std::vector<sim::SimChannel> fSimChannels;
 
-  std::map<raw::ChannelID_t, std::vector<electronEvent_t>> electron_channels;
+  std::map<uint32_t, std::vector<electronEvent_t>> electron_channels;
   std::map<uint32_t, std::vector<tpEvent_t>> tp_channels;
 
   // absolute difference for any unsigned datatype
@@ -129,6 +129,24 @@ private:
     return e_over_threshold;
   }
 
+  double compute_channel_efficiency(std::vector<electronEvent_t>& electron_channel, std::vector<tpEvent_t>& tp_channel, TDCTime_t max_time, uint32_t threshold){
+    size_t num_tps = tp_channel.size();
+    uint32_t e_over_threshold = count_e_over_threshold(electron_channel, max_time, threshold);
+    if(num_tps == 0 && e_over_threshold == 0){
+      return 1.0;
+    } else if(num_tps == 0 && e_over_threshold != 0){
+      return 0.0;
+    }
+    double ratio;
+    if(electron_channel.size() != 0){
+      ratio = static_cast<double>(num_tps)/static_cast<double>(e_over_threshold);
+    }
+    else{
+      ratio = 1.0;
+    }
+    return ratio;
+  }
+
 };
 
 duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p)
@@ -179,7 +197,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
 
   // now let's do the same for the sim channels
   for(sim::SimChannel chan : fSimChannels){
-    raw::ChannelID_t chanid = chan.Channel();
+    uint32_t chanid = static_cast<uint32_t>(chan.Channel());
     if(electron_channels.count(chanid) == 0){
       std::vector<electronEvent_t> new_e_channel; 
       electron_channels[chanid] = new_e_channel;
@@ -193,7 +211,18 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     }
   }
 
-  size_t num_tps = fTriggerPrimitives.size();
+  // let's also have there be the same channel keys in the TPs to make things
+  // easier
+  for(auto& e_pair : electron_channels){
+    uint32_t cur_channel = e_pair.first;
+    if(tp_channels.count(cur_channel) == 0){
+      std::vector<tpEvent_t> blank_tp_channel;
+      tp_channels[cur_channel] = blank_tp_channel;
+    }
+  }
+  
+
+  //size_t num_tps = fTriggerPrimitives.size();
 
 
 /*
@@ -213,6 +242,28 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     electron_thresholds.push_back(static_cast<double>(i));
   }
 
+  // TODO combine these loops? leaving them separate for now
+  std::vector<double> eff_per_t;
+  for(uint32_t thresh : electron_thresholds){
+    std::vector<double> channel_effs;
+    for(auto e_pair : electron_channels){
+      uint32_t channel_id = e_pair.first;
+      std::vector<electronEvent_t> e_channel_data = e_pair.second;
+      std::vector<tpEvent_t> tp_channel_data = tp_channels[channel_id];
+      
+      double channel_eff = compute_channel_efficiency(e_channel_data, tp_channel_data, static_cast<TDCTime_t>(75), thresh);
+      channel_effs.push_back(channel_eff);
+    }
+    double total_eff;
+    if(channel_effs.size() != 0){
+      total_eff = std::reduce(channel_effs.begin(), channel_effs.end())/static_cast<double>(channel_effs.size());
+    } else{
+      total_eff = 1.0;
+    }
+    eff_per_t.push_back(total_eff);
+  }
+
+  /*
   std::vector<double> eff_per_t;
   for (uint32_t thresh : electron_thresholds){
     uint32_t c_el_over_t = 0;
@@ -230,6 +281,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
       eff_per_t.push_back(ratio);
     }
   }
+  */
 
   TCanvas* c1 = new TCanvas();
   auto tg = new TGraph(electron_thresholds.size(), electron_thresholds.data(), eff_per_t.data());
@@ -240,8 +292,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   tg->SetMarkerStyle(21);
   tg->SetMarkerColor(1);
   tg->Draw("AC");
-  c1->SaveAs("test_tgraph4.png");
-
+  c1->SaveAs("test_tgraph_perchan.png");
 
   //std::cout << "Efficiency: " << static_cast<double>(num_tps)/static_cast<double>(total_e_over_thresh) << std::endl;
 
