@@ -27,7 +27,7 @@ source:
 parameters:
 {
     tp_threshold: 200
-    electron_ped: 250
+    electron_ped: 1200 
 }
 
 physics:
