@@ -61,9 +61,22 @@ public:
   TriggerCosmicSensitivityAnalysis &operator=(TriggerCosmicSensitivityAnalysis const &) = delete;
   TriggerCosmicSensitivityAnalysis &operator=(TriggerCosmicSensitivityAnalysis &&) = delete;
 
+  // Note to self: using a struct here would have been way easier than a tuple
   typedef std::tuple<unsigned int, uint32_t, uint16_t> tpEvent_t;
-  typedef std::tuple<unsigned int, float> electronEvent_t;
+  typedef std::tuple<unsigned int, float, float> electronEvent_t;
   typedef unsigned int TDCTime_t;
+
+  typedef struct tpEvent {
+    TDCTime_t tdc_time;
+    uint32_t adc_int;
+    uint16_t adc_peak;
+  };
+
+  typedef struct electronEvent {
+    TDCTime_t tdc_time;
+    float num_electrons;
+    float energy;
+  };
 
   // Required functions.
   void analyze(art::Event const &e) override;
@@ -86,8 +99,8 @@ private:
   std::vector<sim::SimChannel> fSimChannels;
   std::pair<std::vector<double>, std::vector<double>> paired_data;
 
-  std::map<raw::ChannelID_t, std::vector<electronEvent_t>> electron_channels;
-  std::map<uint32_t, std::vector<tpEvent_t>> tp_channels;
+  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels;
+  std::map<uint32_t, std::vector<tpEvent>> tp_channels;
 
   // absolute difference for any unsigned datatype
   // necessary to avoid integer underflow
@@ -97,22 +110,22 @@ private:
 
   // writing some methods we will use in the analysis below
   // TODO? templatize these to use on TPs/other data products?
-  std::vector<electronEvent_t> get_electron_pulse(std::vector<electronEvent_t>& channel_data, unsigned int start_time, unsigned int max_time){
-    std::vector<electronEvent_t> pulse_evts;
-    for(electronEvent_t evt : channel_data){
-      if(u_absdiff<unsigned int>(std::get<0>(evt), start_time) <= max_time){
+  std::vector<electronEvent> get_electron_pulse(std::vector<electronEvent>& channel_data, unsigned int start_time, unsigned int max_time){
+    std::vector<electronEvent> pulse_evts;
+    for(electronEvent evt : channel_data){
+      if(u_absdiff<unsigned int>(evt.tdc_time, start_time) <= max_time){
         pulse_evts.push_back(evt);
       }
     }
     return pulse_evts;
   };
 
-  float find_pulse_peak(std::vector<electronEvent_t>& channel_data, TDCTime_t start_time, TDCTime_t max_time){
-    std::vector<electronEvent_t> e_pulse = get_electron_pulse(channel_data, start_time, max_time);
+  float find_pulse_peak(std::vector<electronEvent>& channel_data, TDCTime_t start_time, TDCTime_t max_time){
+    std::vector<electronEvent> e_pulse = get_electron_pulse(channel_data, start_time, max_time);
     // todo figure out if vectors have nice facilities for this
     unsigned int high = 0;
-    for (electronEvent_t i : e_pulse){
-      unsigned int val = std::get<1>(i);
+    for (electronEvent i : e_pulse){
+      unsigned int val = i.num_electrons;
       if(val > high){
         high = val;
       }
@@ -120,17 +133,17 @@ private:
     return high;
   };
 
-  std::vector<TDCTime_t> pulse_start_times(std::vector<electronEvent_t>& channel_data, TDCTime_t max_time){
-    std::vector<TDCTime_t> start_times = {std::get<TDCTime_t>(channel_data.at(0)),};
+  std::vector<TDCTime_t> pulse_start_times(std::vector<electronEvent>& channel_data, TDCTime_t max_time){
+    std::vector<TDCTime_t> start_times = {channel_data.at(0).tdc_time,};
     for(size_t i = 0; i < (channel_data.size()-1); i++){
-      if( ( ( u_absdiff<unsigned int>(start_times.back(), std::get<0>(channel_data[i])) >= max_time ) || u_absdiff<unsigned int>(std::get<0>(channel_data[i]), std::get<0>(channel_data[i+1])) >= max_time ) & ( u_absdiff<unsigned int>(start_times.back(), std::get<0>(channel_data[i])) >= max_time)){
-        start_times.push_back(std::get<0>(channel_data[i]));
+      if( ( ( u_absdiff<unsigned int>(start_times.back(), channel_data[i].tdc_time) >= max_time ) || u_absdiff<unsigned int>(channel_data[i].tdc_time, channel_data[i+1].tdc_time) >= max_time ) & ( u_absdiff<unsigned int>(start_times.back(), channel_data[i].tdc_time) >= max_time)){
+        start_times.push_back(channel_data[i].tdc_time);
       } 
     }
     return start_times;
   }
 
-  uint32_t count_e_over_threshold(std::vector<electronEvent_t>& channel_data, TDCTime_t max_time, uint32_t threshold) {
+  uint32_t count_e_over_threshold(std::vector<electronEvent>& channel_data, TDCTime_t max_time, uint32_t threshold) {
     uint32_t e_over_threshold = 0U;
     std::vector<TDCTime_t> pulse_starts = pulse_start_times(channel_data, max_time);
     for (TDCTime_t t_start : pulse_starts){
@@ -180,10 +193,14 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     adc_peak = i.adc_peak;
     channel = i.channel;
 
-    tpEvent_t this_tp = {static_cast<TDCTime_t>(adc_time), adc_int, adc_peak};
+    //tpEvent_t this_tp = {static_cast<TDCTime_t>(adc_time), adc_int, adc_peak};
+    tpEvent this_tp;
+    this_tp.tdc_time = static_cast<TDCTime_t>(adc_time); 
+    this_tp.adc_int = adc_int;
+    this_tp.adc_peak = adc_peak;
 
     if(tp_channels.count(channel) == 0){
-      std::vector<tpEvent_t> new_ch_vect;
+      std::vector<tpEvent> new_ch_vect;
       new_ch_vect.push_back(this_tp);
       tp_channels[channel] = new_ch_vect; 
     } else{
@@ -196,14 +213,21 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   for(sim::SimChannel chan : fSimChannels){
     raw::ChannelID_t chanid = chan.Channel();
     if(electron_channels.count(chanid) == 0){
-      std::vector<electronEvent_t> new_e_channel; 
+      std::vector<electronEvent> new_e_channel; 
       electron_channels[chanid] = new_e_channel;
     }
     for(sim::TDCIDE tdcide : chan.TDCIDEMap()){
       unsigned short tdc = tdcide.first;
       for(sim::IDE k : tdcide.second){
         float numElectrons = (k.numElectrons > electron_pedestal) ? k.numElectrons : 0;
-        electron_channels[chanid].push_back({tdc, numElectrons});
+        float energy = k.energy;
+
+        electronEvent this_event;
+        this_event.tdc_time = tdc;
+        this_event.num_electrons = numElectrons;
+        this_event.energy = energy;
+
+        electron_channels[chanid].push_back(this_event);
       }
     }
   }

@@ -61,16 +61,17 @@ void mgraph_m(){
 
     mipaxis_min = (mg->GetXaxis()->GetXmin())*w_ar;
     mipaxis_max = (mg->GetXaxis()->GetXmax())*w_ar;
+    std::cout << mipaxis_max << std::endl;
 
     
 
     TGaxis* mipAxis = new TGaxis(mg->GetXaxis()->GetXmin(), mg->GetYaxis()->GetXmax()+0.045, mg->GetXaxis()->GetXmax(), mg->GetYaxis()->GetXmax()+0.045, mipaxis_min, mipaxis_max, 510,"-");
-    mipAxis->SetTitle("Equivalent MIP (MeV)");
+    mipAxis->SetTitle("Approx. MIP");
     mipAxis->Draw();
     mipAxis->SetTitleFont(42);
     mipAxis->SetTitleSize(0.035);
     mipAxis->SetLabelFont(42);
     mipAxis->SetLabelSize(0.035);
     mipAxis->SetLabelOffset(-0.0075);
-    c1->SaveAs("test_mg.png");
+    c1->SaveAs("triggersens_prelim_mipaxis.png");
 }
