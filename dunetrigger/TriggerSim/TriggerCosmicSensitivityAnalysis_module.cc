@@ -64,13 +64,13 @@ public:
   // Note to self: using a struct here would have been way easier than a tuple
   typedef unsigned int TDCTime_t;
 
-  typedef struct tpEvent {
+  struct tpEvent {
     TDCTime_t tdc_time;
     uint32_t adc_int;
     uint16_t adc_peak;
   };
 
-  typedef struct electronEvent {
+  struct electronEvent {
     TDCTime_t tdc_time;
     float num_electrons;
     float energy;
