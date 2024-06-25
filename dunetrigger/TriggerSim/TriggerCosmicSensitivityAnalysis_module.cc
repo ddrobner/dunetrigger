@@ -62,8 +62,6 @@ public:
   TriggerCosmicSensitivityAnalysis &operator=(TriggerCosmicSensitivityAnalysis &&) = delete;
 
   // Note to self: using a struct here would have been way easier than a tuple
-  typedef std::tuple<unsigned int, uint32_t, uint16_t> tpEvent_t;
-  typedef std::tuple<unsigned int, float, float> electronEvent_t;
   typedef unsigned int TDCTime_t;
 
   typedef struct tpEvent {
