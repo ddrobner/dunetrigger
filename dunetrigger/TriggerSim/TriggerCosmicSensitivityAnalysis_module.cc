@@ -14,6 +14,8 @@
 #include "art/Framework/Principal/Handle.h"
 #include "art/Framework/Principal/Run.h"
 #include "art/Framework/Principal/SubRun.h"
+#include "art_root_io/TFileService.h"
+#include "art_root_io/TFileDirectory.h"
 #include "canvas/Utilities/InputTag.h"
 #include "fhiclcpp/ParameterSet.h"
 #include "messagefacility/MessageLogger/MessageLogger.h"
@@ -30,8 +32,12 @@
 
 #include "TGraph.h"
 #include "TCanvas.h"
+#include "TTree.h"
+#include "TBranch.h"
 
-#include <fstream>
+// I'm just saying screw it and ignoring what art/larsoft does usually here
+#include "TFile.h"
+
 #include <stdint.h>
 #include <map>
 #include <cstdlib>
@@ -68,10 +74,17 @@ private:
   art::InputTag tp_tag_;
   art::InputTag tpc_tag_;
 
+  TTree* fTGTree;
+  TBranch* fPairBranch;
+
+  unsigned int adc_threshold;
+  unsigned int electron_pedestal;
+
   std::vector<dunedaq::trgdataformats::TriggerPrimitive> fTriggerPrimitives;
   std::vector<uint32_t> fADCIntegrals;
 
   std::vector<sim::SimChannel> fSimChannels;
+  std::pair<std::vector<double>, std::vector<double>> paired_data;
 
   std::map<raw::ChannelID_t, std::vector<electronEvent_t>> electron_channels;
   std::map<uint32_t, std::vector<tpEvent_t>> tp_channels;
@@ -134,7 +147,9 @@ private:
 duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p)
     : EDAnalyzer{p},
       tp_tag_(p.get<art::InputTag>("tp_tag")),
-      tpc_tag_(p.get<art::InputTag>("tpc_info_tag"))
+      tpc_tag_(p.get<art::InputTag>("tpc_info_tag")),
+      adc_threshold(p.get<unsigned int>("adc_threshold")),
+      electron_pedestal(p.get<unsigned int>("electron_pedestal"))
 {
   // Call appropriate consumes<>() for any products to be retrieved by this
   // module.
@@ -187,7 +202,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     for(sim::TDCIDE tdcide : chan.TDCIDEMap()){
       unsigned short tdc = tdcide.first;
       for(sim::IDE k : tdcide.second){
-        float numElectrons = k.numElectrons;
+        float numElectrons = (k.numElectrons > electron_pedestal) ? k.numElectrons : 0;
         electron_channels[chanid].push_back({tdc, numElectrons});
       }
     }
@@ -196,20 +211,8 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   size_t num_tps = fTriggerPrimitives.size();
 
 
-/*
-  uint32_t total_e_over_thresh = 0U;
-  for(const auto& sm_pair : electron_channels){
-    //auto cur_channel = sm_pair.first;
-    auto cur_data = sm_pair.second;
-    //std::vector<electronEvent_t> &current_e_channel = sm_pair.second;
-    if(cur_data.size() != 0){
-      total_e_over_thresh += count_e_over_threshold(cur_data, static_cast<TDCTime_t>(75), 1000U);
-    }
-  }
-*/
-
   std::vector<double> electron_thresholds;
-  for(uint32_t i = 0; i < 20000; i += 500){
+  for(uint32_t i = 0; i < 40000; i += 500){
     electron_thresholds.push_back(static_cast<double>(i));
   }
 
@@ -231,16 +234,28 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     }
   }
 
-  TCanvas* c1 = new TCanvas();
+  std::ostringstream tg_title;
+  tg_title << adc_threshold << " ADC;Electron Threshold;Efficiency";
+  //TCanvas* c1 = new TCanvas();
   auto tg = new TGraph(electron_thresholds.size(), electron_thresholds.data(), eff_per_t.data());
-  tg->SetTitle("Trigger Sensitivity (200 ADC Threshold);Electron Threshold;Efficiency");
+  tg->SetTitle(tg_title.str().c_str());
   tg->SetLineColor(2);
   tg->SetLineWidth(3);
   tg->SetMarkerSize(1.25);
   tg->SetMarkerStyle(21);
   tg->SetMarkerColor(1);
   tg->Draw("AC");
-  c1->SaveAs("test_tgraph4.png");
+  //c1->SaveAs("test_tgraph4.png");
+
+  std::ostringstream tg_outfname;
+  tg_outfname << adc_threshold << "_sens.root";
+  std::ostringstream tg_name;
+  tg_name << "TG_" << adc_threshold;
+
+  std::unique_ptr<TFile> o_file(TFile::Open(tg_outfname.str().c_str(), "RECREATE"));
+  tg->Write(tg_name.str().c_str());
+  //o_file->WriteObject(&tg, tg_name.str().c_str());
+  o_file->Close();
 
 
   //std::cout << "Efficiency: " << static_cast<double>(num_tps)/static_cast<double>(total_e_over_thresh) << std::endl;

@@ -27,6 +27,7 @@ source:
 parameters:
 {
     tp_threshold: 200
+    electron_ped: 250
 }
 
 physics:
@@ -64,6 +65,7 @@ physics:
             tp_tag: "tpmakerTPC"
             tpc_info_tag: "tpcrawdecoder:simpleSC"
             adc_threshold: @local::parameters.tp_threshold
+            electron_pedestal: @local::parameters.electron_ped 
         }
     }
 
