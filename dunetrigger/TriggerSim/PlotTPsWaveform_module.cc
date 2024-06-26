@@ -17,6 +17,9 @@
 #include "fhiclcpp/ParameterSet.h"
 #include "messagefacility/MessageLogger/MessageLogger.h"
 
+// art TFileService
+#include "art_root_io/TFileService.h"
+
 // datatypes for data products I need
 // as well as misc other typedef'd types
 #include "detdataformats/trigger/TriggerPrimitive.hpp"
@@ -25,6 +28,14 @@
 #include "lardataobj/RawData/RDTimeStamp.h"
 #include "larcoreobj/SimpleTypesAndConstants/RawTypes.h"
 #include "EventStructs.hh"
+
+#include "TGraph.h"
+#include "TMultiGraph.h"
+#include "TCanvas.h"
+
+// TEMPORARY, let's do this and then try and use the TFileService
+#include "TFile.h"
+
 
 namespace duneana {
   class PlotTPsWaveform;
@@ -54,7 +65,9 @@ private:
   art::InputTag tp_tag;
 
   std::map<uint32_t, std::vector<tpEvent>> tp_channels;
-  std::map<raw::ChannelID_t, raw::RawDigit::ADCvector_t> rawdigit_channels;
+  std::map<uint32_t, raw::RawDigit::ADCvector_t> rawdigit_channels;
+
+  short pedestal = 900;
 
 };
 
@@ -89,7 +102,7 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
 
     // cant do this in one line with POD types apparently?
     tpEvent this_tp;
-    this_tp.tdc_time = static_cast<TDCTime_t>(adc_time);
+    this_tp.tdc_time = static_cast<TDCTime_t>(adc_time/32);
     this_tp.adc_int = adc_int;
     this_tp.adc_peak = adc_peak;
 
@@ -107,12 +120,107 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
   std::vector<raw::RawDigit> rd_vec = *rawdigit_handle;
   for(raw::RawDigit rd : rd_vec){
     raw::RawDigit::ADCvector_t adc_vect = rd.ADCs();
-    raw::ChannelID_t chan = rd.Channel();
+    uint32_t chan = static_cast<uint32_t>(rd.Channel());
     if(rawdigit_channels.count(chan) != 0){
       std::cout << "Channels are not unique !!" << std::endl;
     }
     rawdigit_channels[chan] = adc_vect;
   }
+
+  // let's find channels with a lot of TPs now to look for good candidates
+  for(auto& tp_pair : tp_channels){
+    uint32_t chan = tp_pair.first;
+    size_t num_tps = tp_pair.second.size();
+    if(num_tps > 5){
+      std::cout << "Channel " << chan << ": " << num_tps << " TPs" << std::endl; 
+    }
+  }
+
+  std::vector<uint32_t> high_tp_channels = {9330, 9406, 2306, 4172, 9527};
+
+/*
+  uint32_t t_channel_id = high_tp_channels.at(0);
+  raw::RawDigit::ADCvector_t t_chan_v = rawdigit_channels[t_channel_id];
+  std::vector<int32_t> t_chan_i(t_chan_v.size());
+  for(size_t i = 0; i < t_chan_v.size(); i++){
+    t_chan_i[i] = t_chan_v.at(i) - 900;
+  }
+  std::vector<int32_t> rd_timestamps(t_chan_v.size());
+  for(size_t i = 0; i < t_chan_v.size(); i++){
+    rd_timestamps[i] = i;
+  }
+
+  // make the tgraph, just testing for now
+  auto tg_rds = new TGraph(rd_timestamps.size(), rd_timestamps.data(), t_chan_i.data());
+  tg_rds->SetLineColor(2);
+  tg_rds->SetLineWidth(3);
+  //tg_rds->Draw("AL");
+
+  auto tg_tps = new TGraph();
+  for(tpEvent tp : tp_channels[t_channel_id]){
+    double time = static_cast<double>(tp.tdc_time);
+    double peak = static_cast<double>(tp.adc_peak);
+    tg_tps->AddPoint(time, peak);
+  }
+  tg_tps->SetMarkerSize(1.25);
+  tg_tps->SetMarkerStyle(21);
+  tg_tps->SetMarkerColor(1);
+
+  //TCanvas* c1 = new TCanvas();
+  TMultiGraph *mg = new TMultiGraph();
+  mg->Add(tg_rds, "l");
+  mg->Add(tg_tps, "p");
+  mg->Draw("a");
+
+  //tg_rds->Write("Test_TG");
+  //mg->Write("Test_MG");
+*/
+
+  //std::unique_ptr<TFile> o_file(TFile::Open("test_plot_rd.root", "RECREATE"));
+  art::ServiceHandle<art::TFileService> tfs;
+  tfs->make<TMultiGraph>();
+
+  std::vector<TMultiGraph*> graphs;
+  // ok, now time to make multiple TGraphs for each channel
+  for(uint32_t chan : high_tp_channels){
+    size_t channel_size = rawdigit_channels[chan].size(); 
+    std::vector<int32_t> rd_data(channel_size);
+    for(size_t i = 0; i < channel_size; i++){
+      rd_data[i] = rawdigit_channels[chan].at(i) - pedestal;
+    }
+    std::vector<int32_t> rd_timestamps(channel_size);
+    for(size_t i = 0; i < channel_size; i++){
+      rd_timestamps[i] = i;
+    }
+
+    auto tg_rds = new TGraph(channel_size, rd_timestamps.data(), rd_data.data());
+    tg_rds->SetLineColor(2);
+    tg_rds->SetLineWidth(3);
+    auto tg_tps = new TGraph();
+    for(tpEvent tp : tp_channels[chan]){
+      double time = static_cast<double>(tp.tdc_time);
+      double peak = static_cast<double>(tp.adc_peak);
+      tg_tps->AddPoint(time, peak);
+    }
+    tg_tps->SetMarkerSize(1.25);
+    tg_tps->SetMarkerStyle(21);
+    tg_tps->SetMarkerColor(1);
+
+    TMultiGraph* mg;
+    mg = tfs->make<TMultiGraph>();
+    mg->Add(tg_rds, "l");
+    mg->Add(tg_tps, "p");
+    std::ostringstream tgraph_title;
+    tgraph_title << "Channel " << chan << " TPs and RDs;ADC Counts;Timestamp";
+    mg->SetTitle(tgraph_title.str().c_str());
+    mg->Draw("a");
+    graphs.push_back(mg);
+    std::ostringstream tgraph_name;
+    tgraph_name << "TG_" << chan;
+    mg->Write(tgraph_name.str().c_str());
+  }
+
+  //o_file.Close();
 
 }
 
