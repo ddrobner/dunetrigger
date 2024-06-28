@@ -93,6 +93,8 @@ private:
   std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels;
   std::map<uint32_t, std::vector<tpEvent>> tp_channels;
 
+  std::vector<std::pair<float, bool>> total_eff;
+
   TGraph* tg;
   TFile* o_file;
 
@@ -136,6 +138,55 @@ void duneana::TriggerCosmicSensitivityAnalysis::beginJob(){
 }
 
 void duneana::TriggerCosmicSensitivityAnalysis::endJob(){
+  
+  std::cout << "Running endJob()" << std::endl;
+
+  std::vector<float> e_bin_edges;
+  int max_electrons = 100000;
+  int bin_size = 1250;
+  for(int i = 0; i < max_electrons; i+= bin_size){
+    e_bin_edges.push_back(static_cast<float>(i));
+  }
+
+  std::vector<std::pair<float, float>> bin_results;
+
+  float last_eff = 0.0f;
+  // now let's compute the ratios for each bin
+  for(size_t i = 1; i<e_bin_edges.size(); i++){
+    float bin_low = e_bin_edges.at(i-1);
+    float bin_high = e_bin_edges.at(i);
+
+    float hits_w_tp = 0.0f;
+    float total_hits = 0.0f;
+
+    for(std::pair<float, bool> p: total_eff){
+      float num_es = p.first;
+      bool has_tp = p.second;
+      if( (num_es >= bin_low) && (num_es < bin_high) ){
+        total_hits += 1.0f;
+        if(has_tp){
+          hits_w_tp += 1.0f;
+        }
+      }
+    }
+    float eff = hits_w_tp/total_hits;
+    // check for NaN
+    if(eff != eff){
+      eff = last_eff;
+    } else {
+      eff = hits_w_tp/total_hits;
+    }
+   last_eff = eff;
+    float bin_mid = static_cast<float>(e_bin_edges.at(i-1)) + static_cast<float>(bin_size)/2;
+    std::pair<float, float> this_result(bin_mid, eff);
+    //std::cout << "MID: " << bin_mid << " EFF: " << eff << std::endl;
+    bin_results.push_back(this_result);
+  }
+
+  for(std::pair<float, float> r : bin_results){
+    tg->AddPoint(r.first, r.second);
+  }
+
   tg->Draw("AL");
   std::ostringstream tgname;
   tgname << "TG_" << adc_threshold;
@@ -230,51 +281,10 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
       }
     }
 
-  std::vector<float> e_bin_edges;
-  int max_electrons = 100000;
-  int bin_size = 6250;
-  for(int i = 0; i < max_electrons; i+= bin_size){
-    e_bin_edges.push_back(static_cast<float>(i));
-  }
+    total_eff.reserve(total_eff.size() + std::distance(hit_res.begin(), hit_res.end()));
+    total_eff.insert(total_eff.end(), hit_res.begin(), hit_res.end());
 
-  std::vector<std::pair<float, float>> bin_results;
 
-  float last_eff = 0.0f;
-  // now let's compute the ratios for each bin
-  for(size_t i = 1; i<e_bin_edges.size(); i++){
-    float bin_low = e_bin_edges.at(i-1);
-    float bin_high = e_bin_edges.at(i);
-
-    float hits_w_tp = 0.0f;
-    float total_hits = 0.0f;
-
-    for(std::pair<float, bool> p: hit_res){
-      float num_es = p.first;
-      bool has_tp = p.second;
-      if( (num_es >= bin_low) && (num_es < bin_high) ){
-        total_hits += 1.0f;
-        if(has_tp){
-          hits_w_tp += 1.0f;
-        }
-      }
-    }
-    float eff = hits_w_tp/total_hits;
-    // check for NaN
-    if(eff != eff){
-      eff = last_eff;
-    } else {
-      eff = hits_w_tp/total_hits;
-    }
-   last_eff = eff;
-    float bin_mid = static_cast<float>(e_bin_edges.at(i-1)) + static_cast<float>(bin_size)/2;
-    std::pair<float, float> this_result(bin_mid, eff);
-    //std::cout << "MID: " << bin_mid << " EFF: " << eff << std::endl;
-    bin_results.push_back(this_result);
-  }
-
-  for(std::pair<float, float> r : bin_results){
-    tg->AddPoint(r.first, r.second);
-  }
 }
 
 std::vector<duneana::pulse_t> duneana::TriggerCosmicSensitivityAnalysis::channel_pulse_charges(std::vector<electronEvent>& channel_data, uint32_t threshold){
