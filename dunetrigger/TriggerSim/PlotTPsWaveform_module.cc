@@ -67,7 +67,7 @@ private:
   std::map<uint32_t, std::vector<tpEvent>> tp_channels;
   std::map<uint32_t, raw::RawDigit::ADCvector_t> rawdigit_channels;
 
-  short pedestal = 900;
+  short pedestal = 0;
 
 };
 
@@ -178,9 +178,8 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
 
   //std::unique_ptr<TFile> o_file(TFile::Open("test_plot_rd.root", "RECREATE"));
   art::ServiceHandle<art::TFileService> tfs;
-  tfs->make<TMultiGraph>();
 
-  std::vector<TMultiGraph*> graphs;
+  //std::vector<TMultiGraph*> graphs;
   // ok, now time to make multiple TGraphs for each channel
   for(uint32_t chan : high_tp_channels){
     size_t channel_size = rawdigit_channels[chan].size(); 
@@ -192,7 +191,8 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
     for(size_t i = 0; i < channel_size; i++){
       rd_timestamps[i] = i;
     }
-
+    TCanvas* c1 = new TCanvas();
+    c1->SetCanvasSize(2088,1416);
     auto tg_rds = new TGraph(channel_size, rd_timestamps.data(), rd_data.data());
     tg_rds->SetLineColor(2);
     tg_rds->SetLineWidth(3);
@@ -202,19 +202,24 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
       double peak = static_cast<double>(tp.adc_peak);
       tg_tps->AddPoint(time, peak);
     }
-    tg_tps->SetMarkerSize(1.25);
+    tg_tps->SetMarkerSize(2.0);
     tg_tps->SetMarkerStyle(21);
     tg_tps->SetMarkerColor(1);
+
+    //auto tg_el = new TGraph();
 
     TMultiGraph* mg;
     mg = tfs->make<TMultiGraph>();
     mg->Add(tg_rds, "l");
     mg->Add(tg_tps, "p");
     std::ostringstream tgraph_title;
-    tgraph_title << "Channel " << chan << " TPs and RDs;ADC Counts;Timestamp";
+    tgraph_title << "Channel " << chan << " TPs and RDs;Timestamp;ADC Counts";
     mg->SetTitle(tgraph_title.str().c_str());
     mg->Draw("a");
-    graphs.push_back(mg);
+    //graphs.push_back(mg);
+    std::ostringstream tgraph_img_name;
+    tgraph_img_name << "TG_" << chan <<".png";
+    c1->SaveAs(tgraph_img_name.str().c_str());
     std::ostringstream tgraph_name;
     tgraph_name << "TG_" << chan;
     mg->Write(tgraph_name.str().c_str());
