@@ -56,7 +56,7 @@
 namespace duneana
 {
   // typedef std::pair<TDCTime_t, uint32_t> pulse_t;
-  
+
   class TriggerCosmicSensitivityAnalysis;
 };
 
@@ -118,7 +118,6 @@ private:
     return (a > b) ? a - b : b - a;
   }
 
-  std::vector<pulse_t> channel_pulse_charges(std::vector<electronEvent> &channel_data, uint32_t threshold, uint32_t channel);
 };
 
 duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p)
@@ -236,58 +235,33 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   auto fChanHandle = e.getValidHandle<std::vector<sim::SimChannel>>(tpc_tag_);
   fSimChannels = *fChanHandle;
 
-  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels;
-  std::map<raw::ChannelID_t, std::vector<tpEvent>> tp_channels;
-
   overall_tps += fTriggerPrimitives.size();
 
-  //  process all of the TPs into a map
-  for (dunedaq::trgdataformats::TriggerPrimitive i : fTriggerPrimitives)
-  {
-    raw::ChannelID_t channel  = i.channel;
+  // process the TPs into a map
+  std::map<raw::ChannelID_t, std::vector<tpEvent>> tp_channels = SensUtilityFunctions::process_tps_into_map(fTriggerPrimitives);
 
-    tpEvent this_tp(static_cast<TDCTime_t>(i.time_start/32), static_cast<TDCTime_t>(i.time_peak/32),
-     static_cast<uint32_t>(i.adc_integral), static_cast<uint32_t>(i.adc_peak));
-
-    if (tp_channels.count(channel) == 0)
-    {
-      std::vector<tpEvent> new_ch_vect;
-      new_ch_vect.push_back(this_tp);
-      tp_channels[channel] = new_ch_vect;
-    }
-    else
-    {
-      tp_channels[channel].push_back(this_tp);
-    }
-  }
-
-  // now let's do the same for the sim channels
+  // find which channels are collection channels
+  // to avoid needing the geometry service in the utility classs
+  std::vector<sim::SimChannel> collection_channels;
   for (sim::SimChannel chan : fSimChannels)
   {
     raw::ChannelID_t chanid = chan.Channel();
     auto chan_type = geom->SignalType(geom->ChannelToROP(chanid));
-    if(chan_type == coll_t){
-      if (electron_channels.count(chanid) == 0){
-        std::vector<electronEvent> new_e_channel;
-        electron_channels[chanid] = new_e_channel;
-      }
-      for (sim::TDCIDE tdcide : chan.TDCIDEMap()){
-        unsigned short tdc = tdcide.first;
-        for (sim::IDE k : tdcide.second){
-          electronEvent this_event(tdc, k.numElectrons, k.energy);
-          electron_channels[chanid].push_back(this_event);
-        }
-      }
+    if (chan_type = coll_t)
+    {
+      collection_channels.push_back(chan);
     }
   }
 
+  // and now process the electron channels as we were before
+  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels = SensUtilityFunctions::process_es_into_map(collection_channels);
 
   std::vector<pulse_t> pulses;
 
   for (auto &sm_pair : electron_channels)
   {
     uint32_t cur_chan = sm_pair.first;
-    std::vector<pulse_t> cur_p = channel_pulse_charges(sm_pair.second, electron_threshold, cur_chan);
+    std::vector<pulse_t> cur_p = SensUtilityFunctions::channel_pulse_charges(sm_pair.second, electron_threshold, cur_chan);
     pulses.reserve(pulses.size() + std::distance(cur_p.begin(), cur_p.end()));
     pulses.insert(pulses.end(), cur_p.begin(), cur_p.end());
   }
@@ -320,46 +294,6 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
 
   total_eff.reserve(total_eff.size() + std::distance(deposits_w_tps.begin(), deposits_w_tps.end()));
   total_eff.insert(total_eff.end(), deposits_w_tps.begin(), deposits_w_tps.end());
-}
-
-std::vector<duneana::pulse_t> duneana::TriggerCosmicSensitivityAnalysis::channel_pulse_charges(std::vector<electronEvent> &channel_data, uint32_t threshold, uint32_t channel)
-{
-  std::vector<pulse_t> pulse_info;
-  uint32_t hit_t = 1000;
-  bool last_over = false;
-  pulse_t this_pulse(channel);
-  for (electronEvent e : channel_data)
-  {
-    uint32_t current_charge = static_cast<uint32_t>(e.num_electrons);
-    float current_energy = e.energy;
-    bool is_over = (current_charge > hit_t);
-    if (is_over)
-    {
-      this_pulse.charge += current_charge;
-      this_pulse.energy += current_energy;
-      if (!last_over)
-      {
-        this_pulse.tdctime = e.tdc_time;
-      }
-      if (current_charge > this_pulse.peak_charge)
-      {
-        this_pulse.peak_charge = current_charge;
-      }
-      if (current_energy > this_pulse.peak_energy)
-      {
-        this_pulse.peak_energy = current_energy;
-        this_pulse.peak_time = e.tdc_time;
-      }
-      last_over = true;
-    }
-    else if (last_over && !is_over)
-    {
-      //pulse_t this_pulse(start_time, peak_time, total_charge, total_energy, channel, peak_charge);
-      pulse_info.push_back(this_pulse);
-      pulse_t this_pulse(channel);
-    }
-  }
-  return pulse_info;
 }
 
 DEFINE_ART_MODULE(duneana::TriggerCosmicSensitivityAnalysis)

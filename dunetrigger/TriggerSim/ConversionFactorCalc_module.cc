@@ -29,6 +29,8 @@
 #include "larcoreobj/SimpleTypesAndConstants/geo_types.h"
 #include "larcore/Geometry/Geometry.h"
 
+#include <map>
+
 namespace duneana {
   class ConversionFactorCalc;
 }
@@ -51,21 +53,55 @@ public:
 
 private:
 
-  // Declare member data here.
+  typedef dunedaq::trgdataformats::TriggerPrimitive TriggerPrimitive_t;
+
+  // input tags for the data products we need
+  art::InputTag electron_tag;
+  art::InputTag tp_tag;
+
+  // getting a handle on the geometry service
+  art::ServiceHandle<geo::Geometry> geom;
+
+  // aliasing the enum for collection wire sigtype
+  geo::SigType_t coll_t = geo::_plane_sigtype::kCollection;
+
+  TDCTime_t tp_window;
+
+
+  // abs diff for unsigned integral types template
+  template <typename T>
+  T u_absdiff(T a, T b)
+  {
+    return (a > b) ? a - b : b - a;
+  }
+
+  // storing the output of all of the conversion factors here
+  std::vector<double> peak_conversion_factors;
+  std::vector<double> integral_conversion_factors;
 
 };
 
 
 duneana::ConversionFactorCalc::ConversionFactorCalc(fhicl::ParameterSet const& p)
-  : EDAnalyzer{p}  // ,
+  : EDAnalyzer{p},
+  electron_tag(p.get<art::InputTag>("electron_tag")),
+  tp_tag(p.get<art::InputTag>("tp_tag")),  // ,
+  tp_window(p.get<TDCTime_t>("tp_window"))
   // More initializers here.
 {
-  // Call appropriate consumes<>() for any products to be retrieved by this module.
+  // Call appropriate consumes<>() for any products to be retrieved by this
+  // module.
+  consumes<std::vector<sim::SimChannel>>("electron_tag");
+  consumes<std::vector<TriggerPrimitive_t>>("tp_tag");
 }
 
 void duneana::ConversionFactorCalc::analyze(art::Event const& e)
 {
-  // Implementation of required member function here.
+  std::vector<sim::SimChannel> fElectrons = *(e.getValidHandle<std::vector<sim::SimChannel>>(electron_tag));
+  std::vector<TriggerPrimitive_t> fTPs = *(e.getValidHandle<std::vector<TriggerPrimitive_t>>(tp_tag));
+
+  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels;
+  std::map<raw::ChannelID_t, std::vector<tpEvent>> tp_channels;
 }
 
 DEFINE_ART_MODULE(duneana::ConversionFactorCalc)
