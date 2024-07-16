@@ -35,9 +35,12 @@
 #include "TMultiGraph.h"
 #include "TCanvas.h"
 #include "TAxis.h"
+#include "TGaxis.h"
+#include "TLegend.h"
 
 // TEMPORARY, let's do this and then try and use the TFileService
 #include "TFile.h"
+#include <larcore/Geometry/Geometry.h>
 
 
 namespace duneana {
@@ -66,10 +69,14 @@ private:
   // ART input tags
   art::InputTag rawdigit_tag;
   art::InputTag tp_tag;
-  //art::InputTag electron_tag;
+  art::InputTag electron_tag;
+
+  art::ServiceHandle<geo::Geometry> geom;
+  geo::SigType_t coll_t = geo::_plane_sigtype::kCollection;
 
 
   short pedestal = 900;
+  unsigned int channel;
 
 };
 
@@ -77,7 +84,9 @@ private:
 duneana::PlotTPsWaveform::PlotTPsWaveform(fhicl::ParameterSet const& p)
   : EDAnalyzer{p},
     rawdigit_tag(p.get<art::InputTag>("rawdigit_tag")),
-    tp_tag(p.get<art::InputTag>("tp_tag"))
+    tp_tag(p.get<art::InputTag>("tp_tag")),
+    electron_tag(p.get<art::InputTag>("electron_tag")),
+    channel(p.get<unsigned int>("channel"))
     // ,
   // More initializers here.
 {
@@ -85,7 +94,7 @@ duneana::PlotTPsWaveform::PlotTPsWaveform(fhicl::ParameterSet const& p)
   // module.
   consumes<std::vector<raw::RawDigit>>(rawdigit_tag);
   consumes<std::vector<dunedaq::trgdataformats::TriggerPrimitive>>(tp_tag);
-  //consumes<std::vector<sim::SimChannel>>(electron_tag);
+  consumes<std::vector<sim::SimChannel>>(electron_tag);
 }
 
 void duneana::PlotTPsWaveform::analyze(art::Event const& e)
@@ -98,6 +107,9 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
   std::map<uint32_t, std::vector<tpEvent>> tp_channels;
   std::map<uint32_t, raw::RawDigit::ADCvector_t> rawdigit_channels;
 
+  tp_channels = duneana::SensUtilityFunctions::process_tps_into_map(fTPs);
+
+  /*
   // First let's process the TPs into a vector of tpEvent structs
   for(dunedaq::trgdataformats::TriggerPrimitive i : fTPs) {
     // not dividing by 32 here since we are comparing to raw digits
@@ -120,26 +132,34 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
       tp_channels[channel].push_back(this_tp);
     }
   }
+  */
 
   // now we need to handle the raw digits :)
   auto rawdigit_handle = e.getValidHandle<std::vector<raw::RawDigit>>(rawdigit_tag);
   std::vector<raw::RawDigit> rd_vec = *rawdigit_handle;
   for(raw::RawDigit rd : rd_vec){
-    raw::RawDigit::ADCvector_t adc_vect = rd.ADCs();
-    uint32_t chan = static_cast<uint32_t>(rd.Channel());
-    rawdigit_channels[chan] = adc_vect;
-  }
-
-  // let's find channels with a lot of TPs now to look for good candidates
-  for(auto& tp_pair : tp_channels){
-    uint32_t chan = tp_pair.first;
-    size_t num_tps = tp_pair.second.size();
-    if(num_tps >= 3){
-      std::cout << "Channel " << chan << ": " << num_tps << " TPs" << std::endl; 
+    if(geom->SignalType(geom->ChannelToROP(rd.Channel())) == coll_t){
+      raw::RawDigit::ADCvector_t adc_vect = rd.ADCs();
+      uint32_t chan = static_cast<uint32_t>(rd.Channel());
+      rawdigit_channels[chan] = adc_vect;
     }
   }
+  
+  std::vector<sim::SimChannel> fEls = *(e.getValidHandle<std::vector<sim::SimChannel>>)(electron_tag);
+  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels = SensUtilityFunctions::process_es_into_map(fEls);
 
-  std::vector<uint32_t> high_tp_channels = {2145, 2146};
+  /*
+  // let's find channels with a lot of TPs now to look for good candidates
+  for(auto& rd_pair : rawdigit_channels){
+    uint32_t chan = rd_pair.first;
+    for (tpEvent tp : tp_channels[chan]){
+      if(tp.adc_peak > 900){
+        std::cout << "Channel: " << chan << std::endl;
+      }
+    }
+  }
+  */
+  std::vector<uint32_t> high_tp_channels = {channel};
 
   //std::unique_ptr<TFile> o_file(TFile::Open("test_plot_rd.root", "RECREATE"));
   
@@ -147,11 +167,6 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
 
   //std::vector<TMultiGraph*> graphs;
   // ok, now time to make multiple TGraphs for each channel
-  bool run_this_evt = true;
-  for(uint32_t i : high_tp_channels){
-    run_this_evt = run_this_evt && (tp_channels[i].size() >= 3);
-  }
-  if(run_this_evt){
   for(uint32_t chan : high_tp_channels){
     
     size_t channel_size = rawdigit_channels[chan].size(); 
@@ -178,17 +193,42 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
     tg_tps->SetMarkerStyle(21);
     tg_tps->SetMarkerColor(1);
 
-    //auto tg_el = new TGraph();
+    auto tg_el = new TGraph();
+    for(electronEvent e : electron_channels[chan]){
+      double time = static_cast<double>(e.tdc_time);
+      double deps = static_cast<double>(e.num_electrons)/(41.742);
+      tg_el->AddPoint(time, deps);
+    }
+    tg_el->SetMarkerSize(2.0);
+    tg_el->SetMarkerStyle(20);
+    tg_el->SetMarkerColor(7);
 
     TMultiGraph* mg;
     mg = tfs->make<TMultiGraph>();
     mg->Add(tg_rds, "l");
     mg->Add(tg_tps, "p");
+    mg->Add(tg_el, "p");
+
+    TLegend* lg = new TLegend(0.1, 0.8, 0.2, 0.9);
+    lg->AddEntry(tg_rds, "Raw Waveform");
+    lg->AddEntry(tg_tps, "Trigger Primitives");
+    lg->AddEntry(tg_el, "Electron Deposits");
+
     std::ostringstream tgraph_title;
-    tgraph_title << "Channel " << chan << " TPs and RDs;Timestamp;ADC Counts";
+    tgraph_title << "Channel " << chan << " Electrons, TPs and RDs;Timestamp;ADC Counts";
     mg->SetTitle(tgraph_title.str().c_str());
     mg->Draw("a");
-    mg->GetXaxis()->SetLimits(3500, 5500);
+    lg->Draw();
+    mg->GetXaxis()->SetLimits(3200, 3600);
+    auto elaxis_min = (mg->GetYaxis()->GetXmin()) * 0.041742;
+    auto elaxis_max = (mg->GetYaxis()->GetXmax()) * 0.041742;
+    TGaxis* elaxis = new TGaxis(mg->GetXaxis()->GetXmax(), mg->GetYaxis()->GetXmin(), mg->GetXaxis()->GetXmax(), mg->GetYaxis()->GetXmax(), elaxis_min, elaxis_max, 510, "+L");
+    elaxis->SetTitleFont(42);
+    elaxis->SetTitle("Num. Electrons (x1000)");
+    //elaxis->SetTitleOffset(5);
+    elaxis->Draw();
+    elaxis->SetLabelFont(42);
+    elaxis->SetLabelSize(0.03);
     //graphs.push_back(mg);
     std::ostringstream tgraph_img_name;
     tgraph_img_name << "TG_" << chan <<".png";
@@ -196,11 +236,10 @@ void duneana::PlotTPsWaveform::analyze(art::Event const& e)
     std::ostringstream tgraph_name;
     tgraph_name << "TG_" << chan;
     mg->Write(tgraph_name.str().c_str());
-  }
+    std::cout << "wrote graph" << std::endl;
   }
 
   //o_file.Close();
-
 }
 
 DEFINE_ART_MODULE(duneana::PlotTPsWaveform)

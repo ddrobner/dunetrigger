@@ -51,7 +51,10 @@ public:
 
 private:
 
+  geo::SigType_t coll_t = geo::_plane_sigtype::kCollection;
+
   art::InputTag electron_tag;
+  art::InputTag tp_tag;
 
   art::ServiceHandle<geo::Geometry> geom;
   // Declare member data here.
@@ -61,38 +64,37 @@ private:
 
 duneana::ElectronDumper::ElectronDumper(fhicl::ParameterSet const& p)
   : EDAnalyzer{p},
-  electron_tag(p.get<art::InputTag>("electron_tag"))  // ,
+  electron_tag(p.get<art::InputTag>("electron_tag")),
+  tp_tag(p.get<art::InputTag>("tp_tag"))  // ,
   // More initializers here.
 {
   // Call appropriate consumes<>() for any products to be retrieved by this
   // module.
   consumes<sim::SimChannel>(electron_tag);
+  consumes<sim::SimChannel>(tp_tag);
 }
 
 void duneana::ElectronDumper::analyze(art::Event const& e)
 {
   // Implementation of required member function here.
-  if(e.event() == 13){
-    std::ofstream outfile;
-    outfile.open("electrons_mu_serialized.txt");
-    auto e_handle = e.getValidHandle<std::vector<sim::SimChannel>>(electron_tag);
-    std::vector<sim::SimChannel> els = *e_handle;
-    for(sim::SimChannel ec : els){
-      raw::ChannelID_t chan = ec.Channel();
-      //auto chan_rop = geom->ChannelToROP(chan);
-      //auto chan_type = chan_rop.
-      geo::SigType_t sigtype = geom->SignalType(geom->ChannelToROP(chan));
-      if(sigtype == geo::_plane_sigtype::kCollection){
-        for(sim::TDCIDE tdcide : ec.TDCIDEMap()){
-          TDCTime_t ts = tdcide.first;
-          for(sim::IDE ide : tdcide.second){
-            outfile << "(" << chan << "," << ts << "," << ide.numElectrons << ")" << std::endl;
-          }
+  std::ofstream outfile;
+  outfile.open("electrons_mu_serialized.txt");
+  std::vector<sim::SimChannel> els = *(e.getValidHandle<std::vector<sim::SimChannel>>(electron_tag));
+  for(sim::SimChannel ec : els){
+    raw::ChannelID_t chan = ec.Channel();
+    //auto chan_rop = geom->ChannelToROP(chan);
+    //auto chan_type = chan_rop.
+    geo::SigType_t sigtype = geom->SignalType(geom->ChannelToROP(chan));
+    if(sigtype == coll_t){
+      for(sim::TDCIDE tdcide : ec.TDCIDEMap()){
+        TDCTime_t ts = tdcide.first;
+        for(sim::IDE ide : tdcide.second){
+          outfile << "(" << chan << "," << ts << "," << ide.numElectrons << ")" << std::endl;
         }
       }
     }
-    outfile.close();
   }
+  outfile.close();
 }
 
 DEFINE_ART_MODULE(duneana::ElectronDumper)

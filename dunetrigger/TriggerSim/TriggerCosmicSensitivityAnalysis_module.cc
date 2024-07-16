@@ -19,7 +19,7 @@
 #include "messagefacility/MessageLogger/MessageLogger.h"
 
 // ART root IO
-// #include "art_root_io/TFileService.h"
+#include "art_root_io/TFileService.h"
 // ^^ don't need this for now
 
 // dune trigger structs
@@ -36,17 +36,19 @@
 #include "larcore/Geometry/Geometry.h"
 
 // ROOT classes
-#include "TGraph.h"
+//#include "TGraph.h"
 #include "TCanvas.h"
 #include "TTree.h"
 #include "TBranch.h"
 #include "TMultiGraph.h"
 #include "TH1F.h"
+#include "TGraphErrors.h"
 
 // I'm just saying screw it and ignoring what art/larsoft does usually here
 #include "TFile.h"
 
 // C++ stdlib stuff we need
+#include <math.h>
 #include <stdint.h>
 #include <map>
 #include <cstdlib>
@@ -66,6 +68,9 @@ public:
   explicit TriggerCosmicSensitivityAnalysis(fhicl::ParameterSet const &p);
   // The compiler-generated destructor is fine for non-base
   // classes without bare pointers or other resource use.
+
+  art::ServiceHandle<art::TFileService> tfs;
+
 
   // Plugins should not be copied or assigned.
   TriggerCosmicSensitivityAnalysis(TriggerCosmicSensitivityAnalysis const &) = delete;
@@ -94,10 +99,13 @@ private:
   size_t overall_tps = 0;
   size_t overall_pulses = 0;
 
+  int min_hits = std::numeric_limits<int>::max();
+  int max_hits = 0;
+
   std::vector<std::pair<float, bool>> total_eff;
   std::vector<double> conv_factors;
 
-  TGraph *tg;
+  TGraphErrors *tg;
   TFile *o_file;
 
   art::ServiceHandle<geo::Geometry> geom;
@@ -117,6 +125,34 @@ private:
   {
     return (a > b) ? a - b : b - a;
   }
+
+  struct effError_t {
+    float electrons;
+    float efficiency;
+    float xErr;
+    float yErr;
+    int num_hits;
+
+    effError_t(float electrons, float efficiency, float xErr, float yErr):
+      electrons(electrons),
+      efficiency(efficiency),
+      xErr(xErr),
+      yErr(yErr)
+      {
+        this->num_hits = 0;
+      }
+    effError_t(float electrons, float efficiency, int num_hits):
+    electrons(electrons),
+    efficiency(efficiency),
+    num_hits(num_hits)
+    {
+      this->xErr = 0.0f;
+      this->yErr = 0.0f;
+    }
+  };
+  float compute_xerr(float binsize);
+  float compute_yerr(float num_hits, float efficiency);
+  float compute_yerr_oneside(float num_hits, float efficiency);
 
 };
 
@@ -141,8 +177,11 @@ duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhic
 
 void duneana::TriggerCosmicSensitivityAnalysis::beginJob()
 {
-  tg = new TGraph();
-  o_file = TFile::Open("sens_hist.root", "UPDATE");
+  std::stringstream out_name;
+  out_name << "sens_hists/sens_" << adc_threshold << ".root";
+  tg = new TGraphErrors();
+  //o_file = TFile::Open("sens_hist.root", "UPDATE");
+  o_file = TFile::Open(out_name.str().c_str(), "RECREATE");
   std::ostringstream tg_title;
   tg_title << adc_threshold << " ADC;Num Electrons;Efficiency";
   tg->SetTitle(tg_title.str().c_str());
@@ -154,6 +193,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::endJob()
 {
 
   int round_binsize = binsize;
+  int cur_point = 0;
 
   std::vector<float> e_bin_edges;
   for (int i = 0; i <= max_electrons; i += round_binsize)
@@ -161,7 +201,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::endJob()
     e_bin_edges.push_back(static_cast<float>(i));
   }
 
-  std::vector<std::pair<float, float>> bin_results;
+  std::vector<effError_t> bin_results;
   float last_eff = 0.0f;
   // now let's compute the ratios for each bin
   for (size_t i = 1; i < e_bin_edges.size(); i++)
@@ -197,29 +237,52 @@ void duneana::TriggerCosmicSensitivityAnalysis::endJob()
       eff = hits_w_tp / total_hits;
     }
     last_eff = eff;
-    // float bin_mid = static_cast<float>(e_bin_edges.at(i-1)) + static_cast<float>(round_binsize)/2;
 
-    // std::cout << "Bin: " << bin_mid << " Num Deposits: " << total_hits << std::endl;
-    std::pair<float, float> this_result(bin_low, eff);
+    effError_t this_result(bin_low, eff, total_hits);
     bin_results.push_back(this_result);
   }
-  // std::pair<float, float> zero_bin(0, 0.0f);
-  // bin_results.insert(bin_results.begin(), zero_bin);
-  std::sort(bin_results.begin(), bin_results.end());
+  //std::sort(bin_results.begin(), bin_results.end());
 
-  for (std::pair<float, float> r : bin_results)
+  for (effError_t r : bin_results)
   {
-    tg->AddPoint(r.first, r.second);
+
+    if(r.num_hits < min_hits && r.num_hits > 0){
+	min_hits = r.num_hits;	
+    }
+    if(r.num_hits > max_hits){
+	max_hits = r.num_hits;
+    }
+    float xErr = 0.0f;
+    float yErr = 0.0f;
+
+    xErr = compute_xerr(r.electrons);
+    if(r.efficiency <= 0.999f){
+      // we can use the efficiency as the parameter p for the binomial, since
+      // both the maximum likelihood estimator and method of moments give that
+      // p_hat = x/n where x is the number of successes (ie. TPs) 
+      yErr = compute_yerr(r.num_hits, r.efficiency);
+      // ^^ this gives the uncertainty in the number of hits with TPs, so to get
+      // an efficiency we need to normalize by the number of hits
+    } else{
+			// here we "take the limit" of a binomial approaching q=1 (or p=0) giving
+			// us a poisson
+      // eff of 1.0 is a degenerate case
+			yErr = compute_yerr_oneside(r.num_hits, (r.efficiency == 1.0f) ? 0.99999f : r.efficiency);
+    }
+    tg->AddPoint(r.electrons, r.efficiency);
+    tg->SetPointError(cur_point, xErr, yErr);
+    cur_point += 1;
   }
 
-  tg->Draw("AL");
+  tg->SetFillColorAlpha(1, 0.15f);
+  tg->SetFillStyle(3001);
   std::ostringstream tgname;
   tgname << "TG_" << adc_threshold;
   o_file->cd();
   tg->Write(tgname.str().c_str());
   o_file->Close();
 
-  std::cout << "======== Overall TPs: " << overall_tps << " Overall Pulses With TP: " << overall_pulses << std::endl;
+  std::cout << "Min Hits: " << min_hits << " Max Hits: " << max_hits << std::endl;
 }
 
 void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
@@ -247,7 +310,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   {
     raw::ChannelID_t chanid = chan.Channel();
     auto chan_type = geom->SignalType(geom->ChannelToROP(chanid));
-    if (chan_type = coll_t)
+    if (chan_type == coll_t)
     {
       collection_channels.push_back(chan);
     }
@@ -265,6 +328,7 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
     pulses.reserve(pulses.size() + std::distance(cur_p.begin(), cur_p.end()));
     pulses.insert(pulses.end(), cur_p.begin(), cur_p.end());
   }
+
 
   std::vector<std::pair<float, bool>> deposits_w_tps;
 
@@ -284,16 +348,29 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
         break;
       }
     }
-    if (p_charge < electron_threshold)
-    {
-      has_tp = false;
-    }
     std::pair<float, bool> cur_res(static_cast<float>(p_charge), has_tp);
     deposits_w_tps.push_back(cur_res);
   }
 
+
   total_eff.reserve(total_eff.size() + std::distance(deposits_w_tps.begin(), deposits_w_tps.end()));
   total_eff.insert(total_eff.end(), deposits_w_tps.begin(), deposits_w_tps.end());
+}
+
+float duneana::TriggerCosmicSensitivityAnalysis::compute_xerr(float binsize){
+  return sqrtf(binsize);
+}
+
+float duneana::TriggerCosmicSensitivityAnalysis::compute_yerr(float num_hits, float efficiency){
+  //return sqrtf(num_hits*efficiency*(1.0f - efficiency));
+	return sqrtf(efficiency*(1.0f-efficiency)/num_hits);
+}
+
+float duneana::TriggerCosmicSensitivityAnalysis::compute_yerr_oneside(float num_hits, float efficiency){
+  //return sqrtf(x_point);
+  // this is really (1 - efficiency)*num_hits/num_hits
+  return sqrtf(((1.0f - efficiency)));
+
 }
 
 DEFINE_ART_MODULE(duneana::TriggerCosmicSensitivityAnalysis)
