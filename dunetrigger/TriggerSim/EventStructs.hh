@@ -159,7 +159,11 @@ public:
         // channel, peak_charge);
         pulse_info.push_back(this_pulse);
         pulse_t this_pulse(channel);
+        last_over = false;
       }
+    }
+    if(pulse_info.size() == 0 && this_pulse.charge != 0){
+      pulse_info.push_back(this_pulse);
     }
     return pulse_info;
   }
