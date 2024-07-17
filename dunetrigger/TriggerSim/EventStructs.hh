@@ -87,6 +87,10 @@ struct pulse_t {
 // this enough and don't want to make a whole module for it
 class SensUtilityFunctions {
 public:
+  template <typename T> static T u_absdiff(T a, T b) {
+    return (a > b) ? a - b : b - a;
+  }
+
   static std::map<raw::ChannelID_t, std::vector<tpEvent>> process_tps_into_map(
       std::vector<dunedaq::trgdataformats::TriggerPrimitive> &tps) {
     std::map<raw::ChannelID_t, std::vector<tpEvent>> processed_tps;
@@ -133,13 +137,19 @@ public:
                         uint32_t threshold, uint32_t channel) {
     std::vector<pulse_t> pulse_info;
     // uint32_t hit_t = 1000;
+    TDCTime_t debouncing = 0;
     uint32_t hit_t = threshold;
     bool last_over = false;
+    TDCTime_t last_time = 0;
     pulse_t this_pulse(channel);
     for (electronEvent e : channel_data) {
       uint32_t current_charge = static_cast<uint32_t>(e.num_electrons);
       float current_energy = e.energy;
       bool is_over = (current_charge > hit_t);
+      if(u_absdiff(last_time, e.tdc_time) < debouncing){
+        is_over = last_over;
+      }
+      last_time = e.tdc_time;
       if (is_over) {
         this_pulse.charge += current_charge;
         this_pulse.energy += current_energy;

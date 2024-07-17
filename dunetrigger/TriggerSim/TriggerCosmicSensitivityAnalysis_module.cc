@@ -92,7 +92,6 @@ private:
   art::InputTag tpc_tag_;
 
   unsigned int adc_threshold;
-  unsigned int electron_pedestal;
   int binsize;
   int max_electrons;
   unsigned int tp_window;
@@ -102,8 +101,8 @@ private:
   int min_hits = std::numeric_limits<int>::max();
   int max_hits = 0;
 
-  std::vector<std::pair<float, bool>> total_eff;
-  std::vector<double> conv_factors;
+  std::vector<std::pair<float, bool>> total_eff = {};
+  std::vector<double> conv_factors();
 
   TGraphErrors *tg;
   TFile *o_file;
@@ -113,7 +112,6 @@ private:
 
   // float adc_to_mev = 95.2f;
   // float adc_to_mev = 200.0f;
-  unsigned short adc_tolerance;
 
   uint32_t electron_threshold;
   float adc_to_mev;
@@ -161,11 +159,9 @@ duneana::TriggerCosmicSensitivityAnalysis::TriggerCosmicSensitivityAnalysis(fhic
       tp_tag_(p.get<art::InputTag>("tp_tag")),
       tpc_tag_(p.get<art::InputTag>("tpc_info_tag")),
       adc_threshold(p.get<unsigned int>("adc_threshold")),
-      electron_pedestal(p.get<unsigned int>("electron_pedestal")),
       binsize(p.get<int>("binsize")),
       max_electrons(p.get<int>("max_electrons")),
       tp_window(p.get<unsigned int>("tp_window")),
-      adc_tolerance(p.get<unsigned short>("adc_tolerance")),
       electron_threshold(p.get<uint32_t>("electron_threshold")),
       adc_to_mev(p.get<float>("adc_to_mev"))
 {
@@ -204,18 +200,18 @@ void duneana::TriggerCosmicSensitivityAnalysis::endJob()
   std::vector<effError_t> bin_results;
   float last_eff = 0.0f;
   // now let's compute the ratios for each bin
-  for (size_t i = 1; i < e_bin_edges.size(); i++)
+  for (size_t i = 0; i < (e_bin_edges.size()-1); i++)
   {
-    float bin_low = e_bin_edges.at(i - 1);
-    float bin_high = e_bin_edges.at(i);
+    float bin_low = e_bin_edges.at(i);
+    float bin_high = e_bin_edges.at(i+1);
 
     float hits_w_tp = 0.0f;
     float total_hits = 0.0f;
 
-    for (std::pair<float, bool> p : total_eff)
+    for (std::pair<float, bool> hit : total_eff)
     {
-      float num_es = p.first;
-      bool has_tp = p.second;
+      float num_es = hit.first;
+      bool has_tp = hit.second;
       if ((num_es > bin_low) && (num_es <= bin_high))
       {
         total_hits += 1.0f;
@@ -282,7 +278,9 @@ void duneana::TriggerCosmicSensitivityAnalysis::endJob()
   tg->Write(tgname.str().c_str());
   o_file->Close();
 
-  std::cout << "Min Hits: " << min_hits << " Max Hits: " << max_hits << std::endl;
+  //std::cout << "Min Hits: " << min_hits << " Max Hits: " << max_hits <<
+  //std::endl;
+  std::cout << "Overall Pulses: " << overall_pulses << " Overall TPs: " << overall_tps << std::endl;
 }
 
 void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
@@ -325,6 +323,22 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
   {
     uint32_t cur_chan = sm_pair.first;
     std::vector<pulse_t> cur_p = SensUtilityFunctions::channel_pulse_charges(sm_pair.second, electron_threshold, cur_chan);
+
+     /*
+    if(cur_p.size() == 0){
+      int num_deps = 0;
+      float missed_charge = 0.0f;
+      for (auto d : electron_channels[cur_chan]){
+        if(d.num_electrons > electron_threshold){
+          num_deps += 1;
+          missed_charge += d.num_electrons;
+        }
+      }
+      if(num_deps != 0){
+        std::cout << "Empty Hit Vector! Channel has:" << num_deps << " deposits!" << "Missed " << missed_charge << "e-" << std::endl;
+      }
+    }
+    */
     pulses.reserve(pulses.size() + std::distance(cur_p.begin(), cur_p.end()));
     pulses.insert(pulses.end(), cur_p.begin(), cur_p.end());
   }
@@ -341,12 +355,23 @@ void duneana::TriggerCosmicSensitivityAnalysis::analyze(art::Event const &e)
 
     for (tpEvent tp : tp_channels[p_chan])
     {
+      overall_pulses += 1;
       if (u_absdiff(p.peak_time, tp.peak_time) < tp_window)
       {
         has_tp = true;
-        overall_pulses += 1;
         break;
+      } else if(u_absdiff(p.tdctime, tp.tdc_time) < tp_window){
+        has_tp = true;
+        break;
+      } 
+      /*
+      else if(u_absdiff(p.peak_time, tp.peak_time) < 50 && tp.adc_peak > adc_threshold){
+        std::cout << "Potential Missed TP" << " Time Difference: ";
+        std::cout << u_absdiff(p.peak_time, tp.peak_time) << std::endl;
+        std::cout << "Numer of Electrons: " << p.charge << std::endl;
+        std::cout << "ADC Peak: " << tp.adc_peak << std::endl;
       }
+      */
     }
     std::pair<float, bool> cur_res(static_cast<float>(p_charge), has_tp);
     deposits_w_tps.push_back(cur_res);

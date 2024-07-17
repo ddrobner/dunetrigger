@@ -66,11 +66,11 @@ private:
   // ART input tags
   art::InputTag rawdigit_tag;
   art::InputTag tp_tag;
-  art::InputTag electron_tag;
 
   art::ServiceHandle<geo::Geometry> geom;
   geo::SigType_t coll_t = geo::_plane_sigtype::kCollection;
 
+  //short pedestal = 8300;
   short pedestal = 900;
 
   template <typename T> T u_absdiff(T a, T b) {
@@ -79,9 +79,9 @@ private:
 };
 
 duneana::PlotTPsWaveform::PlotTPsWaveform(fhicl::ParameterSet const &p)
-    : EDAnalyzer{p}, rawdigit_tag(p.get<art::InputTag>("rawdigit_tag")),
-      tp_tag(p.get<art::InputTag>("tp_tag")),
-      electron_tag(p.get<art::InputTag>("electron_tag"))
+    : EDAnalyzer{p}, 
+    rawdigit_tag(p.get<art::InputTag>("rawdigit_tag")),
+    tp_tag(p.get<art::InputTag>("tp_tag"))
 // ,
 // More initializers here.
 {
@@ -89,77 +89,45 @@ duneana::PlotTPsWaveform::PlotTPsWaveform(fhicl::ParameterSet const &p)
   // module.
   consumes<std::vector<raw::RawDigit>>(rawdigit_tag);
   consumes<std::vector<dunedaq::trgdataformats::TriggerPrimitive>>(tp_tag);
-  consumes<std::vector<sim::SimChannel>>(electron_tag);
 }
 
 void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
   // Implementation of required member function here.
 
-  auto fTPHandle =
-      e.getValidHandle<std::vector<dunedaq::trgdataformats::TriggerPrimitive>>(
-          tp_tag);
-  std::vector<dunedaq::trgdataformats::TriggerPrimitive> fTPs = *fTPHandle;
-
-  std::map<uint32_t, std::vector<tpEvent>> tp_channels;
   std::map<uint32_t, raw::RawDigit::ADCvector_t> rawdigit_channels;
-
-  tp_channels = duneana::SensUtilityFunctions::process_tps_into_map(fTPs);
-
-  // First let's process the TPs into a vector of tpEvent structs
-  for (dunedaq::trgdataformats::TriggerPrimitive i : fTPs) {
-    // not dividing by 32 here since we are comparing to raw digits
-    uint64_t adc_time = i.time_start;
-    uint32_t adc_int = i.adc_integral;
-    uint16_t adc_peak = i.adc_peak;
-    int32_t channel = i.channel;
-
-    // cant do this in one line with POD types apparently?
-    tpEvent this_tp;
-    this_tp.tdc_time = static_cast<TDCTime_t>(adc_time / 32);
-    this_tp.adc_int = adc_int;
-    this_tp.adc_peak = adc_peak;
-
-    if (tp_channels.count(channel) == 0) {
-      std::vector<tpEvent> new_ch_vect;
-      new_ch_vect.push_back(this_tp);
-      tp_channels[channel] = new_ch_vect;
-    } else {
-      tp_channels[channel].push_back(this_tp);
-    }
-  }
+  std::map<raw::ChannelID_t, std::vector<tpEvent>> tp_channels;
 
   // now we need to handle the raw digits :)
   auto rawdigit_handle =
       e.getValidHandle<std::vector<raw::RawDigit>>(rawdigit_tag);
   std::vector<raw::RawDigit> rd_vec = *rawdigit_handle;
   for (raw::RawDigit rd : rd_vec) {
-    if (geom->SignalType(geom->ChannelToROP(rd.Channel())) == coll_t) {
+    //if (geom->SignalType(geom->ChannelToROP(rd.Channel())) == coll_t) {
       raw::RawDigit::ADCvector_t adc_vect = rd.ADCs();
       uint32_t chan = static_cast<uint32_t>(rd.Channel());
       rawdigit_channels[chan] = adc_vect;
-    }
+    //}
   }
 
-  std::vector<sim::SimChannel> fEls =
-      *(e.getValidHandle<std::vector<sim::SimChannel>>)(electron_tag);
-  std::map<raw::ChannelID_t, std::vector<electronEvent>> electron_channels =
-      SensUtilityFunctions::process_es_into_map(fEls);
+  std::vector<dunedaq::trgdataformats::TriggerPrimitive> tp_handle = *(e.getValidHandle<std::vector<dunedaq::trgdataformats::TriggerPrimitive>>(tp_tag));
+  tp_channels = SensUtilityFunctions::process_tps_into_map(tp_handle);
 
-  /*
   // let's find channels with a lot of TPs now to look for good candidates
+  /*
   for(auto& rd_pair : rawdigit_channels){
     uint32_t chan = rd_pair.first;
-    for (tpEvent tp : tp_channels[chan]){
-      if(tp.adc_peak > 900){
-        std::cout << "Channel: " << chan << std::endl;
-      }
+    if(tp_channels[chan].size() > 0){
+      std::cout << "Channel: " << chan << std::endl;
     }
   }
   */
-  std::vector<uint32_t> high_tp_channels = {};
-  for (uint32_t i = 2470; i <= 2500; i++) {
-    high_tp_channels.push_back(i);
+  /*
+  for(auto tp : tp_handle){
+    std::cout << tp.channel << std::endl;
   }
+  */
+  std::vector<uint32_t> high_tp_channels = {2244};
+
 
   // std::unique_ptr<TFile> o_file(TFile::Open("test_plot_rd.root",
   // "RECREATE"));
@@ -170,11 +138,13 @@ void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
   //  ok, now time to make multiple TGraphs for each channel
   for (uint32_t chan : high_tp_channels) {
 
-    std::vector<pulse_t> pulses = SensUtilityFunctions::channel_pulse_charges(
-        electron_channels[chan], 2, chan);
+
+   // std::vector<pulse_t> pulses = SensUtilityFunctions::channel_pulse_charges(
+     //   electron_channels[chan], 2, chan);
 
 
     size_t channel_size = rawdigit_channels[chan].size();
+    std::cout << channel_size << std::endl;
     std::vector<int32_t> rd_data(channel_size);
     for (size_t i = 0; i < channel_size; i++) {
       rd_data[i] = rawdigit_channels[chan].at(i) - pedestal;
@@ -190,6 +160,7 @@ void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
     tg_rds->SetLineColor(2);
     tg_rds->SetLineWidth(3);
 
+    /*
     auto tg_el = new TGraph();
     for (electronEvent e : electron_channels[chan]) {
       double time = static_cast<double>(e.tdc_time);
@@ -199,11 +170,12 @@ void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
     tg_el->SetMarkerSize(2.0);
     tg_el->SetMarkerStyle(20);
     tg_el->SetMarkerColor(7);
+    */
 
     TMultiGraph *mg;
     mg = tfs->make<TMultiGraph>();
     mg->Add(tg_rds, "l");
-    mg->Add(tg_el, "p");
+    //mg->Add(tg_el, "p");
 
     size_t num_tps = tp_channels[chan].size();
     auto tg_tps = new TGraph();
@@ -213,33 +185,32 @@ void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
         double time = static_cast<double>(tp.tdc_time);
         double peak = static_cast<double>(tp.adc_peak);
         tg_tps->AddPoint(time, peak);
+        std::cout << "TP Peak: " << tp.adc_peak << std::endl;
       }
       tg_tps->SetMarkerSize(2.0);
       tg_tps->SetMarkerStyle(21);
       tg_tps->SetMarkerColor(1);
 
-      mg->Add(tg_tps, "p");
-    } else {
-      std::cout << "======== TPless Channel: " << chan
-                << " ========" << std::endl;
-        for (auto p : pulses) {
-          std::cout << "Num Electrons Depsited: " << p.charge << std::endl;
-      }
+      //mg->Add(tg_tps, "p");
     }
 
+
+/*
     TLegend *lg = new TLegend(0.1, 0.8, 0.2, 0.9);
     lg->AddEntry(tg_rds, "Raw Waveform");
     if (num_tps != 0) {
       lg->AddEntry(tg_tps, "Trigger Primitives");
     }
     lg->AddEntry(tg_el, "Electron Deposits");
+  */
 
     std::ostringstream tgraph_title;
     tgraph_title << "Channel " << chan
-                 << " Electrons, TPs and RDs;Timestamp;ADC Counts";
+                 << " RDs;Timestamp;ADC Counts";
     mg->SetTitle(tgraph_title.str().c_str());
     mg->Draw("a");
-    lg->Draw();
+    mg->GetXaxis()->SetLimits(4450, 4550);
+    //lg->Draw();
     auto elaxis_min = (mg->GetYaxis()->GetXmin()) * 0.041742;
     auto elaxis_max = (mg->GetYaxis()->GetXmax()) * 0.041742;
     TGaxis *elaxis =
@@ -254,12 +225,11 @@ void duneana::PlotTPsWaveform::analyze(art::Event const &e) {
     elaxis->SetLabelSize(0.03);
     // graphs.push_back(mg);
     std::ostringstream tgraph_img_name;
-    tgraph_img_name << "TG_" << chan << ".png";
+    tgraph_img_name << "TG_" << chan << "_sim.png";
     c1->SaveAs(tgraph_img_name.str().c_str());
     std::ostringstream tgraph_name;
     tgraph_name << "TG_" << chan;
     mg->Write(tgraph_name.str().c_str());
-    std::cout << "wrote graph" << std::endl;
   }
 
   // o_file.Close();
