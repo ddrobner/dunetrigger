@@ -20,7 +20,6 @@
 #include "larcoreobj/SimpleTypesAndConstants/readout_types.h"
 #include "messagefacility/MessageLogger/MessageLogger.h"
 
-
 #include "detdataformats/trigger/TriggerActivityData.hpp"
 #include "detdataformats/trigger/TriggerPrimitive.hpp"
 
@@ -68,6 +67,8 @@ private:
 
   int verbosity;
 
+  nlohmann::json algconfig_json;
+
   // defining this here so it isn't ugly to write every time
   // need it to store the index of the triggerprimitive to later make an
   // art::Assn
@@ -107,7 +108,8 @@ duneana::TriggerActivityMakerOnlineTPC::TriggerActivityMakerOnlineTPC(
     : EDProducer{p}, algname(p.get<std::string>("algorithm")),
       algconfig(p.get<fhicl::ParameterSet>("algconfig")),
       tp_tag(p.get<art::InputTag>("tp_tag")),
-      channel_mask(p.get<std::vector<raw::ChannelID_t>>("channel_mask", std::vector<raw::ChannelID_t>{})),
+      channel_mask(p.get<std::vector<raw::ChannelID_t>>(
+          "channel_mask", std::vector<raw::ChannelID_t>{})),
       verbosity(p.get<int>("verbosity", 1))
 // ,
 // More initializers here.
@@ -123,7 +125,6 @@ duneana::TriggerActivityMakerOnlineTPC::TriggerActivityMakerOnlineTPC(
 
 void duneana::TriggerActivityMakerOnlineTPC::beginJob() {
 
-  nlohmann::json algconfig_json;
   for (auto k : algconfig.get_all_keys()) {
     // TODO handle possible different types
     // from what I've seen it's only uint64's and bools
@@ -145,9 +146,9 @@ void duneana::TriggerActivityMakerOnlineTPC::beginJob() {
   // nice printout of channel mask
   if (verbosity >= TriggerSim::Verbosity::kInfo) {
     std::cout << "Masked Channels:";
-    for(raw::ChannelID_t c : channel_mask){
+    for (raw::ChannelID_t c : channel_mask) {
       std::cout << " " << c;
-      if(!channel_mask.empty() && c != channel_mask.back()){
+      if (!channel_mask.empty() && c != channel_mask.back()) {
         std::cout << ",";
       }
     }
@@ -179,76 +180,80 @@ void duneana::TriggerActivityMakerOnlineTPC::produce(art::Event &e) {
   // in essence what we want to do here, is group the TPs by ROP and then sort
   // by time, but we need to keep the index in the original TP vector (and can't
   // make an art::ptr now so we lose that if we hand it off to the online algo)
+  /*
   std::map<readout::ROPID, std::vector<TriggerPrimitiveIdx>> tp_by_rop;
   for (size_t i = 0; i < tp_vec.size(); ++i) {
     readout::ROPID rop = geom->ChannelToROP(tp_vec.at(i).channel);
     tp_by_rop[rop].push_back(
         std::pair<size_t, TriggerPrimitive>(i, tp_vec.at(i)));
   }
+  */
 
+  std::vector<TriggerPrimitiveIdx> tp_idxs;
+  for (size_t i = 0; i < tp_vec.size(); ++i) {
+    tp_idxs.push_back(std::pair<size_t, TriggerPrimitive>(i, tp_vec.at(i)));
+  }
 
+  // first we need to sort by time
+  std::sort(tp_idxs.begin(), tp_idxs.end(), compareTriggerPrimitive);
 
-  // now we process each ROP
-  for (auto &tps : tp_by_rop) {
-    // first we need to sort by time
-    std::sort(tps.second.begin(), tps.second.end(), compareTriggerPrimitive);
+  // create a vector for the created TAs in the online format
+  std::vector<triggeralgs::TriggerActivity> created_tas = {};
+  // and now loop through the TPs and create TAs
+  for (auto &cur_tp : tp_idxs) {
+    // check that the tp is not in the channel mask
+    if(std::find(channel_mask.begin(), channel_mask.end(), cur_tp.second.channel) == channel_mask.end()){ 
+      alg->operator()(cur_tp.second, created_tas);
+    }
+    else if(verbosity >= TriggerSim::Verbosity::kDebug){
+        std::cout << "Ignoring Masked TP on channel: " << cur_tp.second.channel << std::endl;
+    }
+  }
 
-    // create a vector for the created TAs in the online format
-    std::vector<triggeralgs::TriggerActivity> created_tas = {};
-    // and now loop through the TPs and create TAs
-    for (auto &tp : tps.second) {
-      // check that the tp is not in the channel mask
-      if(std::find(channel_mask.begin(), channel_mask.end(), tp.second.channel) == channel_mask.end()){
-        alg->operator()(tp.second, created_tas);
-      }
-      else if(verbosity >= TriggerSim::Verbosity::kDebug){
-          std::cout << "Ignoring Masked TP on channel: " << tp.second.channel << std::endl;
+  /*
+  if (verbosity >= TriggerSim::Verbosity::kInfo && created_tas.size() > 0) {
+      std::cout << "Created " << created_tas.size() << " TAs on ROP " <<
+  tps.first << std::endl;
+  }
+  */
+
+  // now the fun part
+  // to make the associations we have to use the idx we created earlier
+  // BUT the input TA only has a list of the base objects in it
+  // so we need to search through it and then get out our object with the
+  // index intact to make the association
+  for (auto const &out_ta : created_tas) {
+    // now we find the TPs which are in the output TA and create the
+    // associations
+    auto const taPtr = taPtrMaker(ta_vec_ptr->size());
+
+    // add output ta to the ta dataproduct vector and create a PtrVector for
+    // the TPs in the TA
+    ta_vec_ptr->emplace_back(out_ta);
+    art::PtrVector<TriggerPrimitive> tp_in_ta_ptrs;
+
+    // now loop through each TP in the TA to handle associations
+    for (auto &in_tp : out_ta.inputs) {
+      // get an iterator to matching TPs with find_if
+      std::vector<TriggerPrimitiveIdx>::iterator tp_it = std::find_if(
+          tp_idxs.begin(), tp_idxs.end(),
+          [&](TriggerPrimitiveIdx &t) { return isTPEqual(t.second, in_tp); });
+
+      // find_if will return tps.second.end() if none are found
+      while (tp_it != tp_idxs.end()) {
+        // push back an art::Ptr pointing to the proper index in the vector
+        // of input TPs
+        tp_in_ta_ptrs.push_back(
+            art::Ptr<TriggerPrimitive>(tpHandle, tp_it->first));
+        // get an iterator to the next (if any) matching TP
+        tp_it =
+            std::find_if(++tp_it, tp_idxs.end(), [&](TriggerPrimitiveIdx &t) {
+              return isTPEqual(t.second, in_tp);
+            });
       }
     }
-
-
-    if (verbosity >= TriggerSim::Verbosity::kInfo && created_tas.size() > 0) {
-        std::cout << "Created " << created_tas.size() << " TAs on ROP " << tps.first << std::endl;
-    }
-
-    // now the fun part
-    // to make the associations we have to use the idx we created earlier
-    // BUT the input TA only has a list of the base objects in it
-    // so we need to search through it and then get out our object with the
-    // index intact to make the association
-    for (auto const &out_ta : created_tas) {
-      // now we find the TPs which are in the output TA and create the
-      // associations
-      auto const taPtr = taPtrMaker(ta_vec_ptr->size());
-
-      // add output ta to the ta dataproduct vector and create a PtrVector for
-      // the TPs in the TA
-      ta_vec_ptr->emplace_back(TriggerActivityData(out_ta));
-      art::PtrVector<TriggerPrimitive> tp_in_ta_ptrs;
-
-      // now loop through each TP in the TA to handle associations
-      for (auto &in_tp : out_ta.inputs) {
-        // get an iterator to matching TPs with find_if
-        std::vector<TriggerPrimitiveIdx>::iterator tp_it = std::find_if(
-            tps.second.begin(), tps.second.end(),
-            [&](TriggerPrimitiveIdx &t) { return isTPEqual(t.second, in_tp); });
-
-        // find_if will return tps.second.end() if none are found
-        while (tp_it != tps.second.end()) {
-          // push back an art::Ptr pointing to the proper index in the vector
-          // of input TPs
-          tp_in_ta_ptrs.push_back(
-              art::Ptr<TriggerPrimitive>(tpHandle, tp_it->first));
-          // get an iterator to the next (if any) matching TP
-          tp_it = std::find_if(++tp_it, tps.second.end(),
-                               [&](TriggerPrimitiveIdx &t) {
-                                 return isTPEqual(t.second, in_tp);
-                               });
-        }
-      }
-      // add the associations to the tp_in_ta assoc
-      tp_in_tas_assn_ptr->addMany(taPtr, tp_in_ta_ptrs);
-    }
+    // add the associations to the tp_in_ta assoc
+    tp_in_tas_assn_ptr->addMany(taPtr, tp_in_ta_ptrs);
   }
   // Move the TAs and Associations onto the event
   e.put(std::move(ta_vec_ptr));
