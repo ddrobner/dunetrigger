@@ -29,6 +29,7 @@
 #include "dunetrigger/triggeralgs/include/triggeralgs/TriggerActivityFactory.hpp"
 
 #include <larcoreobj/SimpleTypesAndConstants/RawTypes.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -66,6 +67,7 @@ private:
   std::vector<raw::ChannelID_t> channel_mask;
 
   int verbosity;
+
 
   nlohmann::json algconfig_json;
 
@@ -177,6 +179,9 @@ void duneana::TriggerActivityMakerOnlineTPC::produce(art::Event &e) {
   auto tpHandle = e.getValidHandle<std::vector<TriggerPrimitive>>(tp_tag);
   std::vector<TriggerPrimitive> tp_vec = *tpHandle;
 
+
+  std::vector<triggeralgs::TriggerActivity> created_tas = {};
+
   // in essence what we want to do here, is group the TPs by ROP and then sort
   // by time, but we need to keep the index in the original TP vector (and can't
   // make an art::ptr now so we lose that if we hand it off to the online algo)
@@ -198,7 +203,6 @@ void duneana::TriggerActivityMakerOnlineTPC::produce(art::Event &e) {
   std::sort(tp_idxs.begin(), tp_idxs.end(), compareTriggerPrimitive);
 
   // create a vector for the created TAs in the online format
-  std::vector<triggeralgs::TriggerActivity> created_tas = {};
   // and now loop through the TPs and create TAs
   for (auto &cur_tp : tp_idxs) {
     // check that the tp is not in the channel mask
@@ -209,6 +213,9 @@ void duneana::TriggerActivityMakerOnlineTPC::produce(art::Event &e) {
         std::cout << "Ignoring Masked TP on channel: " << cur_tp.second.channel << std::endl;
     }
   }
+
+
+  alg->flush(std::numeric_limits<triggeralgs::timestamp_t>::max(), created_tas);
 
   /*
   if (verbosity >= TriggerSim::Verbosity::kInfo && created_tas.size() > 0) {
